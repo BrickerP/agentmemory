@@ -36,8 +36,8 @@ jobs:
           package-manager-cache: false
 
       - run: npm install --global npm@11.17.0 --ignore-scripts --no-audit --no-fund
-      - run: npm install --package-lock-only --legacy-peer-deps --no-audit --no-fund
-      - run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - run: npm install --package-lock-only --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+      - run: npm ci --ignore-scripts --legacy-peer-deps --no-audit --no-fund
       - run: npm run build
       - run: npm run skills:check
       - run: npm run docs:check
