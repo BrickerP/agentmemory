@@ -6,6 +6,8 @@ vi.mock("../src/logger.js", () => ({
 
 import { registerExportImportFunction } from "../src/functions/export-import.js";
 import { VERSION } from "../src/version.js";
+import { KV } from "../src/state/schema.js";
+import { withKeyedLock } from "../src/state/keyed-mutex.js";
 import { getSearchIndex } from "../src/functions/search.js";
 import type {
   Session,
@@ -230,7 +232,66 @@ describe("Export/Import Functions", () => {
     expect(result.sessions).toBe(0);
   });
 
+  it.each(["merge", "skip"] as const)("serializes a summary-only %s import with summary publication", async (strategy) => {
+    await kv.delete(KV.summaries, testSession.id);
+    const published = { ...testSummary, title: "Concurrent published summary" };
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const publishing = withKeyedLock(`obs:${testSession.id}`, async () => {
+      entered(); await gate;
+      await kv.set(KV.summaries, testSession.id, published);
+    });
+    await ready;
+    const importing = sdk.trigger("mem::import", { strategy, exportData: {
+      version: VERSION, exportedAt: new Date().toISOString(), sessions: [], observations: {}, memories: [], summaries: [testSummary],
+    } });
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(await kv.get(KV.summaries, testSession.id)).toBeNull();
+    } finally { release(); await publishing; }
+    expect(await importing).toMatchObject({ success: true, summaries: strategy === "skip" ? 0 : 1 });
+    expect(await kv.get(KV.summaries, testSession.id)).toEqual(strategy === "skip" ? published : testSummary);
+  });
+
+  it("keeps summary mutation locks until sibling writes settle after an import failure", async () => {
+    const delayed = { ...testSummary, sessionId: "ses_delayed", title: "Imported delayed summary" };
+    const published = { ...delayed, title: "Summary published after import" };
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const originalSet = kv.set;
+    vi.spyOn(kv, "set").mockImplementation(async (scope, key, value) => {
+      if (scope === KV.summaries && key === testSession.id) throw new Error("summary write failed");
+      if (scope === KV.summaries && key === delayed.sessionId && value === delayed) {
+        entered(); await gate;
+      }
+      return originalSet(scope, key, value);
+    });
+    let settled = false;
+    const importing = sdk.trigger("mem::import", { exportData: {
+      version: VERSION, exportedAt: new Date().toISOString(), sessions: [], observations: {}, memories: [],
+      summaries: [testSummary, delayed],
+    } }).then(() => { settled = true; return null; }, (error: Error) => { settled = true; return error; });
+    await ready;
+    let publishedWhileImporting = false;
+    const publishing = withKeyedLock(`obs:${delayed.sessionId}`, async () => {
+      publishedWhileImporting = true;
+      await kv.set(KV.summaries, delayed.sessionId, published);
+    });
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(publishedWhileImporting).toBe(false);
+    } finally { release(); await publishing; }
+    expect(await importing).toMatchObject({ message: "summary write failed" });
+    expect(await kv.get(KV.summaries, delayed.sessionId)).toEqual(published);
+  });
+
   it("import with replace strategy clears existing data first", async () => {
+    await kv.set(KV.summaryRepairs, testSession.id, { sessionId: testSession.id, token: "old-repair", dueAt: 0, attempts: 0 });
     const newSession: Session = {
       id: "ses_new",
       project: "new-project",
@@ -258,6 +319,7 @@ describe("Export/Import Functions", () => {
 
     const oldSession = await kv.get("mem:sessions", "ses_1");
     expect(oldSession).toBeNull();
+    expect(await kv.get(KV.summaryRepairs, testSession.id)).toBeNull();
   });
 
   it("export then import round-trip preserves data", async () => {
@@ -307,5 +369,64 @@ describe("Export/Import Functions", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("Unsupported export version");
+  });
+});
+
+const bloatedIds = (prefix: string, n: number) =>
+  Array.from({ length: n }, (_, i) => `${prefix}_${String(i).padStart(3, "0")}`);
+
+describe("import bounds graph provenance", () => {
+  it("caps sourceObservationIds on imported graph nodes and edges", async () => {
+    const sdk = mockSdk();
+    const kv = mockKV();
+    registerExportImportFunction(sdk as never, kv as never);
+    const exportData = {
+      version: "0.9.28",
+      exportedAt: new Date().toISOString(),
+      sessions: [],
+      observations: {},
+      memories: [],
+      summaries: [],
+      graphNodes: [
+        {
+          id: "gn_bloat",
+          type: "file",
+          name: "src/hot.ts",
+          properties: {},
+          sourceObservationIds: bloatedIds("obs", 400),
+          createdAt: "2026-03-01T00:00:00Z",
+        },
+        {
+          id: "gn_small",
+          type: "file",
+          name: "src/cold.ts",
+          properties: {},
+          sourceObservationIds: ["obs_x"],
+          createdAt: "2026-03-01T00:00:00Z",
+        },
+      ],
+      graphEdges: [
+        {
+          id: "ge_bloat",
+          type: "related_to",
+          sourceNodeId: "gn_bloat",
+          targetNodeId: "gn_small",
+          weight: 0.5,
+          sourceObservationIds: bloatedIds("eobs", 100),
+          createdAt: "2026-03-01T00:00:00Z",
+        },
+      ],
+    } as unknown as ExportData;
+    const result = (await sdk.trigger("mem::import", {
+      exportData,
+      strategy: "merge",
+    })) as { success: boolean };
+    expect(result.success).toBe(true);
+    const n = await kv.get<{ sourceObservationIds: string[] }>("mem:graph:nodes", "gn_bloat");
+    const s = await kv.get<{ sourceObservationIds: string[] }>("mem:graph:nodes", "gn_small");
+    const e = await kv.get<{ sourceObservationIds: string[] }>("mem:graph:edges", "ge_bloat");
+    expect(n!.sourceObservationIds).toEqual(bloatedIds("obs", 400).slice(-32));
+    expect(s!.sourceObservationIds).toEqual(["obs_x"]);
+    expect(e!.sourceObservationIds).toEqual(bloatedIds("eobs", 100).slice(-32));
   });
 });

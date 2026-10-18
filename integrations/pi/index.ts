@@ -3,7 +3,16 @@ import { Type } from "typebox";
 import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { createPlaintextBearerAuthGuard } from "./security.js";
+import { realpathSync } from "node:fs";
+import { createPlaintextBearerAuthGuard, resolveSecret } from "./security.js";
+
+function repositoryRoot(dir: string, top: string, gitDir?: string, commonDir?: string): string {
+  if (!gitDir || !commonDir) return top;
+  const physical = realpathSync(dir);
+  const common = path.resolve(physical, commonDir);
+  if (path.resolve(physical, gitDir) === common || path.basename(common) !== ".git") return top;
+  return path.dirname(common);
+}
 
 type TextBlock = { type?: string; text?: string };
 type AssistantMessage = { role?: string; content?: unknown };
@@ -96,7 +105,7 @@ async function callAgentMemory<T>(
   const method = options?.method || "POST";
   const url = `${baseUrl}/agentmemory/${pathname.replace(/^\/+/, "")}`;
   const headers: Record<string, string> = {};
-  const secret = process.env.AGENTMEMORY_SECRET;
+  const secret = resolveSecret(baseUrl, process.env.AGENTMEMORY_SECRET);
   guardPlaintextBearerAuth(baseUrl, secret);
   if (options?.body !== undefined) headers["Content-Type"] = "application/json";
   if (secret) headers.Authorization = `Bearer ${secret}`;
@@ -124,7 +133,7 @@ export default function agentmemoryExtension(pi: ExtensionAPI) {
   }
   let sessionId = `ephemeral-${crypto.randomUUID().slice(0, 8)}`;
   // Canonical project scope, matching the hooks' resolveProject order (env
-  // override, git toplevel basename, cwd basename) so Pi sessions share a
+  // override, git repository basename, cwd basename) so Pi sessions share a
   // project bucket with every other agent instead of scoping on a raw path.
   const projectCache = new Map<string, string>();
   function resolveProjectName(dir: string): string {
@@ -134,12 +143,18 @@ export default function agentmemoryExtension(pi: ExtensionAPI) {
     if (cached) return cached;
     let name = path.basename(dir) || dir;
     try {
-      const top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-        cwd: dir,
-        stdio: ["ignore", "pipe", "ignore"],
-        encoding: "utf8",
-      }).trim();
-      if (top) name = path.basename(top);
+      const [top, gitDir, commonDir] = execFileSync(
+        "git",
+        ["rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir"],
+        {
+          cwd: dir,
+          stdio: ["ignore", "pipe", "ignore"],
+          encoding: "utf8",
+        },
+      )
+        .trim()
+        .split(/\r?\n/);
+      if (top) name = path.basename(repositoryRoot(dir, top, gitDir, commonDir));
     } catch {
       // not a git repo
     }
@@ -393,7 +408,6 @@ export default function agentmemoryExtension(pi: ExtensionAPI) {
     // /new, /resume, /fork and reloads fire this too; only quit ends the session.
     if (event.reason !== "quit") return;
     if (!lastHealthOk || !sessionId) return;
-    // session/end already fans out the summary server-side (#1203).
     await callAgentMemory("session/end", {
       body: { sessionId },
       timeoutMs: 5_000,
