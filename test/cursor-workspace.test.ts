@@ -19,6 +19,7 @@ const sessionId = (label: string): string =>
 // payload was rejected have to blank it, or the developer's own shell (PWD)
 // answers instead and the assertion passes for the wrong reason.
 const ENV_KEYS = [
+  'CURSOR_PROJECT_DIR',
   'CURSOR_WORKSPACE_ROOT',
   'CURSOR_WORKSPACE_FOLDER',
   'CURSOR_WORKSPACE_LABEL',
@@ -179,5 +180,57 @@ describe('cursor workspace resolver', () => {
       })
     );
     expect(resolved.project).not.toBe('cursor');
+  });
+
+  it('drops a cached workspace that no longer exists', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'am-ws-'));
+    const oldDir = join(parent, 'old-app');
+    const newDir = join(parent, 'new-app');
+    mkdirSync(oldDir);
+    mkdirSync(newDir);
+    const id = sessionId('moved');
+    try {
+      withoutWorkspaceEnv(() => {
+        expect(resolveWorkspace({ session_id: id, workspace_roots: [oldDir] }).project).toBe('old-app');
+        rmSync(oldDir, { recursive: true, force: true });
+        expect(resolveWorkspace({ session_id: id, workspace_roots: [newDir] }).project).toBe('new-app');
+      });
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('does not cache a workspace inferred from the launch directory', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'am-ws-'));
+    const launchDir = join(parent, 'launch-dir');
+    const realDir = join(parent, 'real-app');
+    mkdirSync(launchDir);
+    mkdirSync(realDir);
+    const id = sessionId('pwd');
+    try {
+      withoutWorkspaceEnv(() => {
+        process.env.PWD = launchDir;
+        expect(resolveWorkspace({ session_id: id }).project).toBe('launch-dir');
+        delete process.env.PWD;
+        expect(resolveWorkspace({ session_id: id, workspace_roots: [realDir] }).project).toBe(
+          'real-app'
+        );
+      });
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("uses Cursor's documented CURSOR_PROJECT_DIR", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'am-ws-'));
+    try {
+      const resolved = withoutWorkspaceEnv(() => {
+        process.env.CURSOR_PROJECT_DIR = dir;
+        return resolveWorkspace({ session_id: sessionId('project-dir') });
+      });
+      expect(resolved.project).toBe(basename(dir));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

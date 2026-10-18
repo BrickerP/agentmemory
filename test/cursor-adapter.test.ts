@@ -157,12 +157,14 @@ describe("delegateHook", () => {
 
     const seen = JSON.parse(chunks.join("")) as {
       project: string;
-      payload: { cwd: string; session_id: string };
+      payload: { cwd: string; session_id: string; project: string };
     };
     // resolveProject() in the canonical hooks reads AGENTMEMORY_PROJECT_NAME
     // before anything else; that is the whole delegation mechanism.
     expect(seen.project).toBe("my-test-project");
     expect(basename(seen.payload.cwd)).toBe("my-test-project");
+    // pre-tool-use reads data.project directly to scope /enrich.
+    expect(seen.payload.project).toBe("my-test-project");
     expect(seen.payload.session_id).toBeTruthy();
   });
 

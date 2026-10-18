@@ -55,6 +55,7 @@ export function enrichPayload(data: HookPayload): {
       ...data,
       session_id: data["session_id"] ?? data["sessionId"],
       cwd,
+      project,
     },
   };
 }

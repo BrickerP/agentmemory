@@ -102,6 +102,10 @@ function mergeMcp(env) {
   return backup;
 }
 
+function isAgentmemoryHook(entry) {
+  return JSON.stringify(entry ?? '').includes('agentmemory');
+}
+
 function disableUserHooks() {
   if (!process.argv.includes('--clear-user-hooks')) return null;
   if (!existsSync(HOOKS_PATH)) return null;
@@ -115,19 +119,30 @@ function disableUserHooks() {
   }
   requireObjectConfig(HOOKS_PATH, hooks, 'hooks.json root');
   requireObjectField(HOOKS_PATH, 'hooks', hooks.hooks);
-  const hasAgentmemory = JSON.stringify(hooks).includes('agentmemory-');
-  if (!hasAgentmemory) return null;
+  if (!hooks.hooks) return null;
+
+  let removed = 0;
+  const filtered = {};
+  for (const [event, entries] of Object.entries(hooks.hooks)) {
+    if (!Array.isArray(entries)) {
+      filtered[event] = entries;
+      continue;
+    }
+    const kept = entries.filter((entry) => !isAgentmemoryHook(entry));
+    removed += entries.length - kept.length;
+    if (kept.length > 0) filtered[event] = kept;
+  }
+  if (removed === 0) return null;
+
   const backup = `${HOOKS_PATH}.pre-plugin-${Date.now()}.bak`;
   copyFileSync(HOOKS_PATH, backup);
-  writeJson(HOOKS_PATH, { version: 1, hooks: {} });
+  writeJson(HOOKS_PATH, { ...hooks, hooks: filtered });
   return backup;
 }
 
 const env = loadConfig(['AGENTMEMORY_URL', 'AGENTMEMORY_SECRET', 'AGENTMEMORY_TOOLS']);
-if (!env.AGENTMEMORY_URL || !env.AGENTMEMORY_SECRET) {
-  console.error(
-    `Missing AGENTMEMORY_URL / AGENTMEMORY_SECRET. Set them in the environment or in ${ENV_PATH}.`
-  );
+if (!env.AGENTMEMORY_URL) {
+  console.error(`Missing AGENTMEMORY_URL. Set it in the environment or in ${ENV_PATH}.`);
   process.exit(1);
 }
 
@@ -146,7 +161,7 @@ if (existsSync(LEGACY_MARKETPLACE_DIR)) {
 if (mcpBackup) console.log(`mcp.json backup: ${mcpBackup}`);
 if (hooksBackup) console.log(`hooks.json backup: ${hooksBackup}`);
 console.log(`AGENTMEMORY_URL: ${env.AGENTMEMORY_URL}`);
-console.log('AGENTMEMORY_SECRET: <set, not printed>');
+console.log(`AGENTMEMORY_SECRET: ${env.AGENTMEMORY_SECRET ? '<set, not printed>' : '<empty, keyless daemon>'}`);
 console.log('\nNext steps:');
 console.log('1. Cursor → Settings → Plugins → Add marketplace from folder:');
 console.log(`   ${REPO_ROOT}`);

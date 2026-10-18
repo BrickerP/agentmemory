@@ -15,7 +15,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { requireConnection } from './_env.mjs';
+import { authHeader, requireConnection } from './_env.mjs';
 
 const INTEGRATION_ROOT = resolve(dirname(fileURLToPath(import.meta.url)));
 const REPO_ROOT = resolve(INTEGRATION_ROOT, '../..');
@@ -25,7 +25,7 @@ const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 90000;
 
 const { url, secret } = requireConnection();
-const authHeaders = { Authorization: `Bearer ${secret}` };
+const authHeaders = authHeader(secret);
 
 function runHook(script, args, payload) {
   const r = spawnSync(process.execPath, [join(CURSOR_SCRIPTS, script), ...args], {

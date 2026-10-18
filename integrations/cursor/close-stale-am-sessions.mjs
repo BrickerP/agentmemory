@@ -8,7 +8,7 @@
  *   node integrations/cursor/close-stale-am-sessions.mjs --min-age-hours 6 --project my-project
  *   node integrations/cursor/close-stale-am-sessions.mjs --exclude ses_abc123,def456
  */
-import { requireConnection } from './_env.mjs';
+import { authHeader, requireConnection } from './_env.mjs';
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -44,7 +44,7 @@ async function main() {
   const { url: restUrl, secret } = requireConnection();
 
   const headers = {
-    Authorization: `Bearer ${secret}`,
+    ...authHeader(secret),
     'Content-Type': 'application/json'
   };
 

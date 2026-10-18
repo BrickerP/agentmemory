@@ -199,6 +199,8 @@ const HOME = homedir();
 const CURSOR_PROJECTS_DIR = join(HOME, ".cursor", "projects");
 const SESSION_CACHE_PATH = join(HOME, ".cursor", "hooks", ".agentmemory-session-cache.json");
 const HOOK_PAYLOAD_DIR = join(HOME, ".cursor", "hooks", ".am-hook-payloads");
+const SESSION_CACHE_MAX_AGE_MS = 10080 * 60 * 1e3;
+const SESSION_CACHE_MAX_ENTRIES = 200;
 function normalizePathSlashes(value) {
 	return String(value).replace(/\\/g, "/");
 }
@@ -260,15 +262,24 @@ function loadSessionCache() {
 		return {};
 	}
 }
+function pruneSessionCache(cache, now) {
+	const fresh = Object.entries(cache).filter(([, entry]) => {
+		const updated = Date.parse(entry?.updatedAt ?? "");
+		return Number.isFinite(updated) && now - updated < SESSION_CACHE_MAX_AGE_MS;
+	});
+	fresh.sort((a, b) => Date.parse(b[1].updatedAt) - Date.parse(a[1].updatedAt));
+	return Object.fromEntries(fresh.slice(0, SESSION_CACHE_MAX_ENTRIES));
+}
 function rememberSession(sessionId, project, cwd) {
 	if (!sessionId || !project || project === ".cursor") return;
 	withSessionCacheLock(() => {
 		try {
-			const cache = loadSessionCache();
+			const now = Date.now();
+			const cache = pruneSessionCache(loadSessionCache(), now);
 			cache[sessionId] = {
 				project,
 				cwd,
-				updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+				updatedAt: new Date(now).toISOString()
 			};
 			const tmp = `${SESSION_CACHE_PATH}.${process.pid}.${Date.now()}.tmp`;
 			writeFileSync(tmp, JSON.stringify(cache, null, 2));
@@ -571,7 +582,7 @@ function resolveFromPathCandidates(candidates, sessionId, options = {}) {
 		const project = projectFromPath(existing);
 		if (isHomeDirectory(existing) && !project.fromGitRoot) continue;
 		if (!isMetadataProject(project)) {
-			rememberSession(sessionId, project.name, existing);
+			if (options.remember !== false) rememberSession(sessionId, project.name, existing);
 			return {
 				project: project.name,
 				cwd: existing
@@ -587,7 +598,7 @@ function debugLayer(layer, result) {
 function resolveWorkspace(data) {
 	const sessionId = data?.["session_id"] ?? data?.["sessionId"];
 	const cached = recallSession(sessionId);
-	if (cached?.cwd && !isBadPath(cached.cwd)) return {
+	if (cached?.cwd && !isBadPath(cached.cwd) && existingDirectory(cached.cwd)) return {
 		project: cached.project,
 		cwd: cached.cwd
 	};
@@ -611,20 +622,18 @@ function resolveWorkspace(data) {
 		if (fromSession) return fromSession;
 	}
 	const fromEnv = debugLayer("env", resolveFromPathCandidates([
+		process.env["CURSOR_PROJECT_DIR"],
 		process.env["CURSOR_WORKSPACE_ROOT"],
-		process.env["CURSOR_WORKSPACE_FOLDER"],
-		process.env["PWD"],
-		process.env["VSCODE_CWD"]
+		process.env["CURSOR_WORKSPACE_FOLDER"]
 	], sessionId));
 	if (fromEnv) return fromEnv;
+	const fromLaunch = debugLayer("launch-env", resolveFromPathCandidates([process.env["PWD"], process.env["VSCODE_CWD"]], sessionId, { remember: false }));
+	if (fromLaunch) return fromLaunch;
 	const label = process.env["CURSOR_WORKSPACE_LABEL"];
-	if (label) {
-		rememberSession(sessionId, label, label);
-		return {
-			project: label,
-			cwd: label
-		};
-	}
+	if (label) return {
+		project: label,
+		cwd: label
+	};
 	return {
 		project: "unknown-project",
 		cwd: "unknown-project"
@@ -658,7 +667,8 @@ function enrichPayload(data) {
 		payload: {
 			...data,
 			session_id: data["session_id"] ?? data["sessionId"],
-			cwd
+			cwd,
+			project
 		}
 	};
 }

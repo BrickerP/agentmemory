@@ -14,7 +14,7 @@ Generated from `src/cli/connect/index.ts`. Do not edit the block below by hand; 
 | Codex CLI | `codex` | Using MCP. Hooks ship via the Codex plugin; on Codex Desktop, also pass --with-hooks to install the global hooks.json workaround. |
 | Continue | `continue` | Using MCP via ~/.continue/config.yaml (preferred) or config.json (legacy, only when no yaml). |
 | GitHub Copilot CLI | `copilot-cli` | Using MCP. Install the plugin too for full hooks/skills coverage. |
-| Cursor | `cursor` | Using MCP (the only protocol Cursor speaks). Memory bridge runs at :3111 underneath. |
+| Cursor | `cursor` | Using MCP. Lifecycle hooks ship in the Cursor plugin: Settings → Plugins → Add marketplace → this repo, then enable agentmemory. |
 | Devin CLI | `devin` | Using MCP via the user config. Devin CLI migrates mcpServers into mcp_config.json on newer builds. Pass --with-hooks for native auto-capture. |
 | Droid (Factory.ai) | `droid` | Using MCP via ~/.factory/mcp.json. The `/mcp` slash command inside droid lists configured servers. Pass --with-hooks to also install the native ~/.factory/hooks.json auto-capture hooks. |
 | DeepSeek Harness | `dsh` | Using MCP via $DSH_HOME/cordis.patch.yml (the home-level patch layer every profile loads). Tools appear as mcp__agentmemory__*. Pass --with-hooks to also wire auto-capture through Harness's Claude Code hook bridge. |

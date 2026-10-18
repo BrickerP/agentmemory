@@ -22,7 +22,17 @@ export function parseEnvFile(path = ENV_PATH) {
     if (!trimmed || trimmed.startsWith('#')) continue;
     const idx = trimmed.indexOf('=');
     if (idx === -1) continue;
-    out[trimmed.slice(0, idx).trim()] = trimmed.slice(idx + 1).trim();
+    const key = trimmed.slice(0, idx).trim().replace(/^export\s+/, '');
+    let value = trimmed.slice(idx + 1).trim();
+    const quote = value[0] === '"' || value[0] === "'" ? value[0] : '';
+    if (quote) {
+      const close = value.indexOf(quote, 1);
+      if (close !== -1) value = value.slice(1, close);
+    } else {
+      const hash = value.indexOf(' #');
+      if (hash !== -1) value = value.slice(0, hash).trim();
+    }
+    out[key] = value;
   }
   return out;
 }
@@ -38,17 +48,23 @@ export function loadConfig(keys, path = ENV_PATH) {
   return out;
 }
 
-/** loadConfig for the two keys every script needs, with a uniform error. */
+/**
+ * loadConfig for the two keys every script needs. The URL is required; the
+ * secret may be empty because a local daemon can run keyless.
+ */
 export function requireConnection(path = ENV_PATH) {
   const { AGENTMEMORY_URL: url, AGENTMEMORY_SECRET: secret } = loadConfig(
     ['AGENTMEMORY_URL', 'AGENTMEMORY_SECRET'],
     path
   );
-  if (!url || !secret) {
-    console.error(
-      `Missing AGENTMEMORY_URL / AGENTMEMORY_SECRET. Set them in the environment or in ${path}.`
-    );
+  if (!url) {
+    console.error(`Missing AGENTMEMORY_URL. Set it in the environment or in ${path}.`);
     process.exit(1);
   }
   return { url, secret };
+}
+
+/** Bearer header only when a secret is configured. */
+export function authHeader(secret) {
+  return secret ? { Authorization: `Bearer ${secret}` } : {};
 }

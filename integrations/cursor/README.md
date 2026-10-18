@@ -11,8 +11,8 @@ work. Cursor gets a thin adapter in front of them, compiled from
 
 ## Quick local install
 
-Prereq: `AGENTMEMORY_URL` and `AGENTMEMORY_SECRET`, in the environment or in
-`~/.agentmemory/.env`.
+Prereq: `AGENTMEMORY_URL` (and `AGENTMEMORY_SECRET` when the daemon sets one),
+in the environment or in `~/.agentmemory/.env`.
 
 ```bash
 npm run build
@@ -30,7 +30,8 @@ Then in Cursor:
 4. **Developer: Reload Window**
 5. Confirm the hooks log shows `plugin/scripts/cursor/run-hook.mjs` or `run-detached.mjs`
 
-Only after plugin hooks are confirmed:
+Only after plugin hooks are confirmed, remove the old agentmemory entries from
+`~/.cursor/hooks.json` (other hooks are kept, and a backup is written):
 
 ```bash
 node integrations/cursor/install-local.mjs --clear-user-hooks
@@ -170,13 +171,14 @@ later hook in that session is a single JSON read.
 
 | # | Layer | Basis | Notes |
 |---|---|---|---|
-| 1 | Session cache | previous answer | `~/.cursor/hooks/.agentmemory-session-cache.json`, written under a lock |
+| 1 | Session cache | previous answer | `~/.cursor/hooks/.agentmemory-session-cache.json`, written under a lock; entries expire after 7 days (max 200) and are ignored once their directory is gone |
 | 2 | Payload paths | `workspace_roots`, `workspace_folder`, `cwd`, … | eight aliases because Cursor is inconsistent; `cwd` is deliberately ranked low |
 | 3 | `tool_input` paths | any path-shaped string in the tool arguments | file paths resolve to their directory |
 | 4 | **Cursor's database** | `composer.composerHeaders` | exact, no inference — see below |
 | 5 | Transcript directory name | `~/.cursor/projects/<slug>/` | slug is the workspace path with separators flattened |
 | 6 | Transcript contents | most-mentioned git root | a guess; needs ≥3 votes |
-| 7 | Environment | `CURSOR_WORKSPACE_ROOT`, `PWD`, `VSCODE_CWD` | last, because `VSCODE_CWD` lies |
+| 7 | Environment | `CURSOR_PROJECT_DIR`, `CURSOR_WORKSPACE_ROOT`, `CURSOR_WORKSPACE_FOLDER` | Cursor's documented hook env var, then explicit overrides |
+| 7b | Launch directory | `PWD`, `VSCODE_CWD` | used for this hook only, never cached, because `VSCODE_CWD` lies |
 | 8 | `unknown-project` | — | the honest answer when nothing else is |
 
 Every candidate then passes the same gate: not `.cursor`, not an IDE install

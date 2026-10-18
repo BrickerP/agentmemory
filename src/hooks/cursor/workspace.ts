@@ -41,6 +41,9 @@ interface SessionCacheEntry {
 
 type SessionCache = Record<string, SessionCacheEntry>;
 
+const SESSION_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_CACHE_MAX_ENTRIES = 200;
+
 export function normalizePathSlashes(value: unknown): string {
   return String(value).replace(/\\/g, "/");
 }
@@ -127,12 +130,24 @@ function loadSessionCache(): SessionCache {
   }
 }
 
+// Every hook is a fresh process that parses this file, so it is kept small:
+// stale sessions are dropped and only the most recent entries survive.
+function pruneSessionCache(cache: SessionCache, now: number): SessionCache {
+  const fresh = Object.entries(cache).filter(([, entry]) => {
+    const updated = Date.parse(entry?.updatedAt ?? "");
+    return Number.isFinite(updated) && now - updated < SESSION_CACHE_MAX_AGE_MS;
+  });
+  fresh.sort((a, b) => Date.parse(b[1].updatedAt) - Date.parse(a[1].updatedAt));
+  return Object.fromEntries(fresh.slice(0, SESSION_CACHE_MAX_ENTRIES));
+}
+
 function rememberSession(sessionId: string | undefined, project: string, cwd: string): void {
   if (!sessionId || !project || project === ".cursor") return;
   withSessionCacheLock(() => {
     try {
-      const cache = loadSessionCache();
-      cache[sessionId] = { project, cwd, updatedAt: new Date().toISOString() };
+      const now = Date.now();
+      const cache = pruneSessionCache(loadSessionCache(), now);
+      cache[sessionId] = { project, cwd, updatedAt: new Date(now).toISOString() };
       const tmp = `${SESSION_CACHE_PATH}.${process.pid}.${Date.now()}.tmp`;
       writeFileSync(tmp, JSON.stringify(cache, null, 2));
       renameSync(tmp, SESSION_CACHE_PATH);
@@ -597,7 +612,7 @@ function existingDirectory(pathValue: string): string | null {
 function resolveFromPathCandidates(
   candidates: unknown[],
   sessionId: string | undefined,
-  options: { exact?: boolean } = {},
+  options: { exact?: boolean; remember?: boolean } = {},
 ): Workspace | null {
   for (const candidate of candidates) {
     if (typeof candidate !== "string" || isBadPath(candidate)) continue;
@@ -612,7 +627,7 @@ function resolveFromPathCandidates(
     // is the dotfiles-checked-out-in-$HOME layout.
     if (isHomeDirectory(existing) && !project.fromGitRoot) continue;
     if (!isMetadataProject(project)) {
-      rememberSession(sessionId, project.name, existing);
+      if (options.remember !== false) rememberSession(sessionId, project.name, existing);
       return { project: project.name, cwd: existing };
     }
   }
@@ -632,8 +647,10 @@ function debugLayer(layer: string, result: Workspace | null): Workspace | null {
 
 export function resolveWorkspace(data: HookData): Workspace {
   const sessionId = (data?.["session_id"] ?? data?.["sessionId"]) as string | undefined;
+  // A cached workspace that has since moved or been deleted is stale; fall
+  // through so the current payload can replace it.
   const cached = recallSession(sessionId);
-  if (cached?.cwd && !isBadPath(cached.cwd)) {
+  if (cached?.cwd && !isBadPath(cached.cwd) && existingDirectory(cached.cwd)) {
     return { project: cached.project, cwd: cached.cwd };
   }
 
@@ -678,22 +695,28 @@ export function resolveWorkspace(data: HookData): Workspace {
     if (fromSession) return fromSession;
   }
 
-  // Env comes last: VSCODE_CWD in particular is frequently the IDE install
-  // directory rather than the workspace.
-  const envCandidates: unknown[] = [
+  // Env comes last. CURSOR_PROJECT_DIR is Cursor's documented workspace root
+  // for hooks; the other two are explicit user overrides. Those are cached.
+  const authoritativeEnv: unknown[] = [
+    process.env["CURSOR_PROJECT_DIR"],
     process.env["CURSOR_WORKSPACE_ROOT"],
     process.env["CURSOR_WORKSPACE_FOLDER"],
-    process.env["PWD"],
-    process.env["VSCODE_CWD"],
   ];
-  const fromEnv = debugLayer("env", resolveFromPathCandidates(envCandidates, sessionId));
+  const fromEnv = debugLayer("env", resolveFromPathCandidates(authoritativeEnv, sessionId));
   if (fromEnv) return fromEnv;
 
+  // PWD and VSCODE_CWD only describe where the hook process was launched
+  // (VSCODE_CWD is often the IDE install directory), so they are used for
+  // this hook but never cached: later hooks with real evidence must win.
+  const launchEnv: unknown[] = [process.env["PWD"], process.env["VSCODE_CWD"]];
+  const fromLaunch = debugLayer(
+    "launch-env",
+    resolveFromPathCandidates(launchEnv, sessionId, { remember: false }),
+  );
+  if (fromLaunch) return fromLaunch;
+
   const label = process.env["CURSOR_WORKSPACE_LABEL"];
-  if (label) {
-    rememberSession(sessionId, label, label);
-    return { project: label, cwd: label };
-  }
+  if (label) return { project: label, cwd: label };
 
   return { project: "unknown-project", cwd: "unknown-project" };
 }
