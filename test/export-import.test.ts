@@ -342,6 +342,17 @@ describe("Export/Import Functions", () => {
     { section: "facets", shape: "a null row", value: [null], error: "facets[0] must be an object with a string id" },
     { section: "memories", shape: "a null row", value: [null], error: "memories[0] must be an object with a string id" },
     { section: "accessLogs", shape: "a null row", value: [null], error: "accessLogs[0] must be an object with a string memoryId" },
+    { section: "lessons", shape: "a row without id", value: [{ content: "x" }], error: "lessons[0] must be an object with a string id" },
+    { section: "lessons", shape: "a row with an empty id", value: [{ id: "" }], error: "lessons[0] must be an object with a string id" },
+    { section: "profiles", shape: "a row without project", value: [{ id: "my-project" }], error: "profiles[0] must be an object with a string project" },
+    { section: "sessions", shape: "a row without id", value: [{}], error: "sessions[0] must be an object with a string id" },
+    { section: "summaries", shape: "a row without sessionId", value: [{ id: "ses_1" }], error: "summaries[0] must be an object with a string sessionId" },
+    {
+      section: "observations",
+      shape: "a row without id",
+      value: { ses_1: [{ sessionId: "ses_1" }] },
+      error: "observations.ses_1[0] must be an object with a string id",
+    },
   ])("replace import leaves the store intact when $section is $shape", async ({ section, value, error }) => {
     const exportData = {
       version: VERSION,
