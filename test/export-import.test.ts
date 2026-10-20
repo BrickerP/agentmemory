@@ -338,6 +338,10 @@ describe("Export/Import Functions", () => {
       value: Array.from({ length: 50_001 }, () => ({ memoryId: testMemory.id })),
       error: "Too many access logs (max 50000)",
     },
+    { section: "lessons", shape: "a null row", value: [null], error: "lessons[0] must be an object with a string id" },
+    { section: "facets", shape: "a null row", value: [null], error: "facets[0] must be an object with a string id" },
+    { section: "memories", shape: "a null row", value: [null], error: "memories[0] must be an object with a string id" },
+    { section: "accessLogs", shape: "a null row", value: [null], error: "accessLogs[0] must be an object with a string memoryId" },
   ])("replace import leaves the store intact when $section is $shape", async ({ section, value, error }) => {
     const exportData = {
       version: VERSION,

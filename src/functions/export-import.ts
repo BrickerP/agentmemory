@@ -407,10 +407,27 @@ export function registerExportImportFunction(sdk: IIIClient, state: StateKV): vo
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
-      for (const section of ["profiles", ...EXPORT_COLLECTIONS.map(([field]) => field)] as const) {
+      const badRow = (rows: readonly unknown[], key: string) =>
+        rows.findIndex((row) => {
+          const id = row && typeof row === "object" ? (row as Record<string, unknown>)[key] : undefined;
+          return typeof id !== "string" || id.length === 0;
+        });
+      for (const [sessionId, obs] of Object.entries(importData.observations)) {
+        const index = badRow(obs, "id");
+        if (index >= 0) {
+          return { success: false, error: `observations.${sessionId}[${index}] must be an object with a string id` };
+        }
+      }
+      const rowKeys: Record<string, string> = { summaries: "sessionId", profiles: "project", accessLogs: "memoryId" };
+      for (const section of ["sessions", "memories", "summaries", "profiles", ...EXPORT_COLLECTIONS.map(([field]) => field)] as const) {
         const rows = importData[section];
         if (rows != null && !Array.isArray(rows)) {
           return { success: false, error: `${section} must be an array` };
+        }
+        const key = rowKeys[section] ?? "id";
+        const index = badRow(rows ?? [], key);
+        if (index >= 0) {
+          return { success: false, error: `${section}[${index}] must be an object with a string ${key}` };
         }
       }
       if ((importData.accessLogs?.length ?? 0) > MAX_ACCESS_LOGS) {
